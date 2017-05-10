@@ -9,7 +9,7 @@ Dependencies:
 
 Usage:
 - install streamlink with `pip install streamlink --upgrade`
-- (if needed) install the google drive api with `pip install google-api-python-client --upgrade ` and place the client_secret.json that you created in the same folder as the script (follow [step 1](https://developers.google.com/drive/v3/web/quickstart/python))
+- (if needed) install the google drive api with `pip install google-api-python-client --upgrade` and place the client_secret.json that you created in the same folder as the script (follow [step 1](https://developers.google.com/drive/v3/web/quickstart/python))
 - Call `python check.py -help` to see how to configure it
 
 

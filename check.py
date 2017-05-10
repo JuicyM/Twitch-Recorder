@@ -6,12 +6,13 @@ import threading
 import argparse
 import httplib2
 import os
+import progressbar
+import re
 
 from urllib.request import urlopen
 from urllib.error import URLError
 from threading import Timer
 
-import re
 from apiclient import discovery
 from googleapiclient.http import MediaFileUpload
 from oauth2client import client
@@ -30,6 +31,7 @@ quality = 'best'
 client_id = None
 drive_folder = None
 remove_uploaded = False
+is_recording = False
 
 
 def get_credentials():
@@ -69,18 +71,25 @@ def upload_to_gdrive(filename):
     media = MediaFileUpload(filename, mimetype=None, resumable=True)
     request = drive.files().create(body=file_metadata, media_body=media, fields='id')
 
+    print("Uploading [" + filename + "] to google drive...")
     response = None
+    bar = progressbar.ProgressBar(maxval=100, widgets=[progressbar.Bar('#', '[', ']'), ' ', progressbar.Percentage()])
+    bar.start()
     while response is None:
         status, response = request.next_chunk()
         if status:
-            print("Upload in progress: " + str(round(status.progress(), 3)))
-            # TODO remove local video after upload
+            current_percent = status.progress() * 100
+            bar.update(current_percent)
+    bar.finish()
+
+    if remove_uploaded:
+        os.remove(filename)
 
 
 def check_user(user):
     """ returns 0: online, 1: offline, 2: not found, 3: error """
     global info
-    url = 'https://api.twitch.tv/kraken/streams/' + user + '?client_id='+client_id
+    url = 'https://api.twitch.tv/kraken/streams/' + user + '?client_id=' + client_id
     try:
         info = json.loads(urlopen(url, timeout=15).read().decode('utf-8'))
         if info['stream'] is None:
@@ -96,6 +105,7 @@ def check_user(user):
 
 
 def loopcheck():
+    global is_recording
     status = check_user(user)
     if status == 2:
         print("username not found. invalid username?")
@@ -106,17 +116,24 @@ def loopcheck():
         print(user, "currently offline, checking again in", timer, "seconds")
         t.start()
     elif status == 0:
-        print(user, "online. stop.")
-        filename = datetime.datetime.now().strftime("%Y-%m-%d %H-%M-%S") + " - " + user + " - " + (info['stream']).get("channel").get(
-            "status") + ".flv"
-        filename = re.sub('[^A-Za-z0-9. -\[\]@]+', '', filename)
-        subprocess.call(["streamlink", "https://twitch.tv/" + user, quality, "-o", filename])
-        print("Stream is done. Queuing upload if necessary and going back to checking..")
+        print(user, "online")
 
-        # Start upload if a drive folder id was set
-        if drive_folder:
-            t1 = threading.Thread(target=upload_to_gdrive, args=(filename,))
-            t1.start()
+        if not is_recording:
+            print("recording...")
+            is_recording = True
+            filename = datetime.datetime.now().strftime("%Y-%m-%d %H-%M-%S") + " - " + user + " - " + (info['stream']).get("channel").get(
+                "status") + ".flv"
+            filename = re.sub('[^A-Za-z0-9. -\[\]@]+', '', filename)
+            subprocess.call(["streamlink", "https://twitch.tv/" + user, quality, "-o", filename])
+            print("Stream is done. Queuing upload if necessary and going back to checking..")
+            is_recording = False
+
+            # Start upload if a drive folder id was set
+            if drive_folder:
+                t1 = threading.Thread(target=upload_to_gdrive, args=(filename,))
+                t1.start()
+        else:
+            pass  # don't start a new recording if there is one running already
 
         t = Timer(timer, loopcheck)
         t.start()
@@ -128,23 +145,25 @@ def main():
     global quality
     global drive_folder
     global remove_uploaded
+    global client_id
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-timer", help="Stream check interval (less than 15s are not recommended)")
     parser.add_argument("-user", help="Twitch user that we are checking")
     parser.add_argument("-quality", help="Recording quality")
-    parser.add_argument("-drive-folder", help="Google Drive folder where the recordings will be uploaded")
-    parser.add_argument("-remove-uploaded", help="If true the local video will be deleted from the folder after uploading it")
+    parser.add_argument("-drivefolder", help="Google Drive folder where the recordings will be uploaded")
+    parser.add_argument("-removeuploaded", help="If true the local video will be deleted from the folder after uploading it")
+    parser.add_argument("-clientid", help="Your twitch app client id")
     args = parser.parse_args()
 
     if args.timer is not None:
-        timer = args.timer
+        timer = int(args.timer)
     if args.user is not None:
         user = args.user
     if args.quality is not None:
         quality = args.quality
-    if args.drive_folder is not None:
-        drive_folder = args.drive_folder
+    if args.drivefolder is not None:
+        drive_folder = args.drivefolder
         # authorize application for google drive
         try:
             credentials = get_credentials()
@@ -153,11 +172,13 @@ def main():
             print("ERROR: Could not find the client_sercret.json please download it from the google drive api page and place it in this folder.")
             return
 
-    if args.remove_uploaded is not None:
-        remove_uploaded = args.remove_uploaded
+    if args.removeuploaded is not None:
+        remove_uploaded = args.removeuploaded
 
-    if not client_id:
-        print("Please create a twitch app and set the client id with -client-id [YOUR ID]")
+    if args.clientid is not None:
+        client_id = args.clientid
+    else:
+        print("Please create a twitch app and set the client id with -clientid [YOUR ID]")
         return
 
     t = Timer(timer, loopcheck)
